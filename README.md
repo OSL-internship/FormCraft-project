@@ -29,7 +29,7 @@ FormCraft is a form builder that helps users create, customize, preview, and man
 ### Frontend Setup
 
 ```bash
-cd client
+
 npm install
 ```
 

@@ -128,6 +128,7 @@ app.get("/api/forms", async (req, res) => {
   }
 });
 
+
 /* Get one form by ID */
 app.get("/api/forms/:id", async (req, res) => {
   try {
@@ -157,82 +158,6 @@ app.get("/api/forms/:id", async (req, res) => {
 
 
 
-/* Publish form */
-app.patch("/api/forms/:id/publish", async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!mongoose.isValidObjectId(id)) {
-      return res.status(400).json({
-        message: "Invalid form ID.",
-      });
-    }
-
-    const form = await Form.findByIdAndUpdate(
-      id,
-      { status: "published" },
-      { new: true, runValidators: true }
-    );
-
-    if (!form) {
-      return res.status(404).json({
-        message: "Form not found.",
-      });
-    }
-
-    res.json({
-      message: "Form published successfully",
-      form,
-      shareUrl: `http://localhost:5173/forms/${form._id}`,
-    });
-  } catch (error) {
-    console.error("Publish form error:", error);
-
-    res.status(500).json({
-      message: "Failed to publish form.",
-    });
-  }
-});
-
-
-
-
-/* Get published form for renderer */
-app.get("/api/forms/:id/published", async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!mongoose.isValidObjectId(id)) {
-      return res.status(400).json({
-        message: "Invalid form ID.",
-      });
-    }
-
-    const form = await Form.findOne({
-      _id: id,
-      status: "published",
-    });
-
-    if (!form) {
-      return res.status(404).json({
-        message: "Published form not found.",
-      });
-    }
-
-    res.json({
-      message: "Published form retrieved successfully",
-      form,
-    });
-  } catch (error) {
-    console.error("Get published form error:", error);
-
-    res.status(500).json({
-      message: "Failed to retrieve published form.",
-    });
-  }
-});
-
-
 
 /* Submit form response */
 app.post("/api/forms/:id/submit", async (req, res) => {
@@ -240,16 +165,25 @@ app.post("/api/forms/:id/submit", async (req, res) => {
     const { id } = req.params;
     const answers = req.body;
 
-    const form = await Form.findOne({
-      _id: id,
-      status: "published",
-    });
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({
+        message: "Invalid form ID.",
+      });
+    }
+
+    const form = await Form.findById(id);
 
     if (!form) {
       return res.status(404).json({
-        message: "Published form not found.",
+        message: "Form not found.",
       });
-    }  
+    }
+
+    if (form.status !== "published") {
+      return res.status(403).json({
+        message: "This form is not published yet.",
+      });
+    }
 
     if (
       !answers ||
@@ -262,6 +196,7 @@ app.post("/api/forms/:id/submit", async (req, res) => {
     }
 
     const errors = {};
+
     const visibleFields = form.fields.filter((field) =>
       isFieldVisible(field, form.fields, answers)
     );
@@ -313,13 +248,11 @@ app.post("/api/forms/:id/submit", async (req, res) => {
 app.get("/api/forms/:id/responses", async (req, res) => {
   try {
     const { id } = req.params;
-
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({
         message: "Invalid form ID.",
       });
     }
-
     const responses = await Response.find({
       formId: id,
     }).sort({ createdAt: -1 });
@@ -330,6 +263,111 @@ app.get("/api/forms/:id/responses", async (req, res) => {
 
     res.status(500).json({
       message: "Failed to retrieve responses.",
+    });
+  }
+});
+
+
+app.delete("/api/forms/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({
+        message: "Invalid form ID.",
+      });
+    }
+    const form = await Form.findById(id);
+    if (!form) {
+      return res.status(404).json({
+        message: "Form not found.",
+      });
+    }
+
+    await Response.deleteMany({ formId: id });
+    await Form.findByIdAndDelete(id);
+
+    res.status(200).json({
+      message: "Form and its responses deleted successfully.",
+    });
+  } catch (error) {
+    console.error("Delete form error:", error);
+
+    res.status(500).json({
+      message: "Failed to delete form.",
+    });
+  }
+});
+
+
+/* Publish form */
+app.patch("/api/forms/:id/publish", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({
+        message: "Invalid form ID.",
+      });
+    }
+
+    const form = await Form.findByIdAndUpdate(
+      id,
+      { status: "published" },
+      { new: true, runValidators: true }
+    );
+
+    if (!form) {
+      return res.status(404).json({
+        message: "Form not found.",
+      });
+    }
+
+    res.json({
+      message: "Form published successfully",
+      form,
+      shareUrl: `http://localhost:5173/forms/${form._id}`,
+    });
+  } catch (error) {
+    console.error("Publish form error:", error);
+
+    res.status(500).json({
+      message: "Failed to publish form.",
+    });
+  }
+});
+
+
+/* Get published form for renderer */
+app.get("/api/forms/:id/published", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({
+        message: "Invalid form ID.",
+      });
+    }
+
+    const form = await Form.findOne({
+      _id: id,
+      status: "published",
+    });
+
+    if (!form) {
+      return res.status(404).json({
+        message: "Published form not found.",
+      });
+    }
+
+    res.json({
+      message: "Published form retrieved successfully",
+      form,
+    });
+  } catch (error) {
+    console.error("Get published form error:", error);
+
+    res.status(500).json({
+      message: "Failed to retrieve published form.",
     });
   }
 });

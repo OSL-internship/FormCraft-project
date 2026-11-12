@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { apiRequest } from "./services/api";
 import { validateField } from "./lib/validation";
 import { isFieldVisible } from "./lib/conditionEvaluator";
@@ -32,16 +32,45 @@ function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [savedForms, setSavedForms] = useState([]);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [formStatus, setFormStatus] = useState("draft");
+
+
+  const [draggedFieldType, setDraggedFieldType] = useState(null);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [saveMessageType, setSaveMessageType] = useState("");
+
+  useEffect(() => {
+    if (!saveMessage) return;
+
+    const timer = setTimeout(() => {
+      setSaveMessage("");
+    }, 3000);
+
+    return () => clearTimeout(timer);
+  }, [saveMessage]);
 
 
 
   function addField(type) {
+    const baseName = type.toLowerCase().replaceAll(" ", "_");
+
+    let suffix = 1;
+    let fieldName = `${baseName}_${suffix}`;
+
+    while (fields.some((field) => field.name === fieldName)) {
+      suffix++;
+      fieldName = `${baseName}_${suffix}`;
+    }
+
     const newField = {
       id: crypto.randomUUID(),
       type,
       label: type,
-      name: `${type.toLowerCase().replaceAll(" ", "_")}_${fields.length + 1}`,
+      name: fieldName,
       placeholder: "",
+      defaultValue: "",
+      helpText: "",
       required: false,
       options: ["Option 1", "Option 2"],
       minLength: "",
@@ -52,16 +81,50 @@ function App() {
       errorMessage: "",
       conditions: [],
     };
+
     setFields((currentFields) => [...currentFields, newField]);
     setSelectedFieldId(newField.id);
   }
-
 
   const selectedField = fields.find(
     (field) => field.id === selectedFieldId
   );
 
+
   function updateSelectedField(property, value) {
+    if (property === "conditions") {
+      setImportError("");
+      const selectedField = fields.find(
+        (field) => field.id === selectedFieldId
+      );
+
+      if (!selectedField) return;
+
+      const createsCycle = (fieldId, visited = new Set()) => {
+        if (fieldId === selectedFieldId) return true;
+        if (visited.has(fieldId)) return false;
+
+        visited.add(fieldId);
+
+        const field = fields.find((item) => item.id === fieldId);
+        if (!field) return false;
+
+        return (field.conditions || []).some((condition) =>
+          createsCycle(condition.fieldId, new Set(visited))
+        );
+      };
+
+      const hasCycle = value.some(
+        (condition) =>
+          condition.fieldId && createsCycle(condition.fieldId)
+      );
+
+      if (hasCycle) {
+        setImportError("Circular condition detected. Please choose another field.");
+        return;
+      }
+    }
+
     setFields((currentFields) =>
       currentFields.map((field) =>
         field.id === selectedFieldId
@@ -71,19 +134,78 @@ function App() {
     );
   }
 
+
   function deleteSelectedField() {
-    setFields((currentFields) =>
-      currentFields.filter((field) => field.id !== selectedFieldId)
+    const dependentFields = fields.filter((field) =>
+      field.conditions?.some(
+        (condition) => condition.fieldId === selectedFieldId
+      )
     );
+
+    if (dependentFields.length > 0) {
+      const names = dependentFields
+        .map((field) => field.label)
+        .join(", ");
+
+      const confirmed = window.confirm(
+        `These fields depend on this field: ${names}. Delete it and remove their conditions?`
+      );
+
+      if (!confirmed) return;
+    }
+
+    setFields((currentFields) =>
+      currentFields
+        .filter((field) => field.id !== selectedFieldId)
+        .map((field) => ({
+          ...field,
+          conditions: (field.conditions || []).filter(
+            (condition) => condition.fieldId !== selectedFieldId
+          ),
+        }))
+    );
+
     setSelectedFieldId(null);
+    setImportError("");
   }
 
 
+  async function handleDeleteForm(id) {
+    const confirmDelete = window.confirm(
+      "Are you sure you want to delete this form?"
+    );
+
+    if (!confirmDelete) return;
+
+    try {
+      await apiRequest(`/forms/${id}`, {
+        method: "DELETE",
+      });
+
+      setSaveMessage("Form deleted successfully!");
+
+      if (formId === id) {
+        handleNewForm();
+      }
+
+      await fetchSavedForms();
+    } catch (error) {
+      setSaveMessage(error.message);
+    }
+  }
+
   function renderField(field) {
     const commonProps = {
+      id: field.id,
+      "aria-invalid": errors[field.name]?.length > 0,
+      "aria-describedby": errors[field.name]?.length > 0
+        ? `${field.id}-error`
+        : field.helpText
+          ? `${field.id}-help`
+          : undefined,
       name: field.name,
       placeholder: field.placeholder || field.label,
-      value: formValues[field.name] ?? "",
+      value: formValues[field.name] ?? field.defaultValue ?? "",
       required: field.required,
       onChange: (e) => {
         const value = e.target.value;
@@ -117,47 +239,102 @@ function App() {
       className: "mt-2 w-full rounded-lg border border-slate-300 p-2",
     };
 
+
+    const fieldLabel = (
+      <label htmlFor={field.id} className="block font-medium">
+        {field.label}
+        {field.required && <span aria-hidden="true"> *</span>}
+      </label>
+    );
+
     switch (field.type) {
       case "Text":
-        return <input type="text" {...commonProps} />;
-
-      case "Email":
-        return <input type="email" {...commonProps} />;
-
-      case "Number":
-        return <input type="number" {...commonProps} />;
-
-      case "Textarea":
-        return <textarea {...commonProps} rows={3} />;
-
-      case "Date":
-        return <input type="date" {...commonProps} className={commonProps.className} />;
-
-      case "Checkbox":
         return (
-          <label className="mt-2 flex items-center gap-2">
-            <input
-              type="checkbox"
-              name={field.name}
-              checked={Boolean(formValues[field.name])}
-              required={field.required}
-              onChange={(e) =>
-                updateFormValue(field.name, e.target.checked)
-              }
-            />
-            {field.label}
-          </label>
+          <>
+
+            <input type="text" {...commonProps} />
+          </>
         );
 
+      case "Email":
+        return (
+          <>
+            <input type="email" {...commonProps} />
+          </>
+        );
+      case "Number":
+        return (
+          <>
+            <input type="number" {...commonProps} />
+          </>
+        );
+      case "Textarea":
+        return (
+          <>
+            <textarea {...commonProps} rows={3} />
+          </>
+        );
+      case "Date":
+        return (
+          <>
+            <input type="date" {...commonProps} className={commonProps.className} />
+          </>
+        );
+      case "Checkbox":
+        return (
+          <div className="mt-2">
+            <label htmlFor={field.id} className="flex items-center gap-2">
+              <input
+                id={field.id}
+                type="checkbox"
+                name={field.name}
+                checked={Boolean(formValues[field.name])}
+                required={field.required}
+                aria-invalid={errors[field.name]?.length > 0}
+                aria-describedby={
+                  errors[field.name]?.length > 0
+                    ? `${field.id}-error`
+                    : field.helpText
+                      ? `${field.id}-help`
+                      : undefined
+                }
+                onChange={(e) =>
+                  updateFormValue(field.name, e.target.checked)
+                }
+              />
+              {field.label}
+            </label>
+          </div>
+        );
 
       case "Select":
         return (
           <select
             name={field.name}
-            value={formValues[field.name] ?? ""}
-            onChange={(e) =>
-              updateFormValue(field.name, e.target.value)
+            id={field.id}
+            aria-invalid={errors[field.name]?.length > 0}
+            aria-describedby={
+              errors[field.name]?.length > 0
+                ? `${field.id}-error`
+                : field.helpText
+                  ? `${field.id}-help`
+                  : undefined
             }
+            value={formValues[field.name] ?? ""}
+            onChange={(e) => {
+              const value = e.target.value;
+
+              updateFormValue(field.name, value);
+
+              if (touchedFields[field.name]) {
+                const fieldErrors = validateField(field, value);
+
+                setErrors((current) => ({
+                  ...current,
+                  [field.name]: fieldErrors,
+                }));
+              }
+            }}
             onBlur={() => {
               setTouchedFields((current) => ({
                 ...current,
@@ -181,18 +358,27 @@ function App() {
       case "Radio Group":
         return (
           <div className="mt-2 space-y-2">
-            {(field.options || []).map((option) => (
-              <label key={option} className="flex items-center gap-2">
-                <input type="radio" name={field.name} value={option}
-                  checked={formValues[field.name] === option}
-                  onChange={(e) => updateFormValue(field.name, e.target.value)}
-                />
-                {option}
-              </label>
-            ))}
+            {field.options.map((option, index) => {
+              const optionId = `${field.id}-option-${index}`;
+
+              return (
+                <label key={optionId} htmlFor={optionId} className="flex items-center gap-2">
+                  <input
+                    id={optionId}
+                    type="radio"
+                    name={field.name}
+                    value={option}
+                    checked={formValues[field.name] === option}
+                    onChange={(e) =>
+                      updateFormValue(field.name, e.target.value)
+                    }
+                  />
+                  {option}
+                </label>
+              );
+            })}
           </div>
         );
-
       default:
         return null;
     }
@@ -212,12 +398,14 @@ function App() {
   async function handleSaveForm() {
     if (!formTitle.trim()) {
       setSaveMessage("Please enter a form title.");
+      setSaveMessageType("error");
       return;
     }
 
     try {
       setIsSaving(true);
       setSaveMessage("");
+      setSaveMessageType("");
 
       const data = await apiRequest(
         formId ? `/forms/${formId}` : "/forms",
@@ -233,13 +421,73 @@ function App() {
       const savedForm = data.form || data;
       setFormId(savedForm._id || savedForm.id);
 
+      if (savedForm.status) {
+        setFormStatus(savedForm.status);
+      }
+
+
       setSaveMessage("Form saved successfully!");
+      setSaveMessageType("success");
     } catch (error) {
       setSaveMessage(error.message);
+      setSaveMessageType("error");
     } finally {
       setIsSaving(false);
     }
   }
+
+
+  async function handlePublishForm() {
+    if (!formId) {
+      setSaveMessage("Please save the form before publishing.");
+      setSaveMessageType("error");
+      return;
+    }
+
+    try {
+      setIsPublishing(true);
+      setSaveMessage("");
+      setSaveMessageType("");
+
+      const data = await apiRequest(`/forms/${formId}/publish`, {
+        method: "PATCH",
+      });
+
+      setFormStatus(data.form?.status || "published");
+      setSaveMessage("Form published successfully!");
+      setSaveMessageType("success");
+
+      await fetchSavedForms();
+    } catch (error) {
+      setSaveMessage(error.message);
+      setSaveMessageType("error");
+    } finally {
+      setIsPublishing(false);
+    }
+  }
+
+
+  function handleNewForm() {
+    setFormId(null);
+    setFormStatus("draft");
+    setFormTitle("");
+    setFields([]);
+    setSelectedFieldId(null);
+    setSaveMessage("");
+    setSavedForms([]);
+  }
+
+  async function handleCopyLink(id) {
+    const url = `${window.location.origin}/forms/${id}`;
+
+    try {
+      await navigator.clipboard.writeText(url);
+      setSaveMessage("Form link copied successfully!");
+    } catch (error) {
+      setSaveMessage("Unable to copy form link.");
+    }
+  }
+  
 
   async function fetchSavedForms() {
     try {
@@ -254,10 +502,10 @@ function App() {
     try {
       const data = await apiRequest(`/forms/${id}`);
       const form = data.form || data;
-      console.log("Loaded fields:", form.fields);
-      console.log("Field IDs:", form.fields.map((field) => field.id));
+
       setFormId(form._id);
       setFormTitle(form.title);
+      setFormStatus(form.status || "draft");
       setFields(form.fields);
       setSelectedFieldId(null);
       setFormValues({});
@@ -283,7 +531,7 @@ function App() {
     );
 
     visibleFields.forEach((field) => {
-      const value = formValues[field.name] ?? "";
+      const value = formValues[field.name] ?? field.defaultValue ?? "";
       const fieldErrors = validateField(field, value);
 
       if (fieldErrors.length > 0) {
@@ -302,7 +550,7 @@ function App() {
     const submittedValues = Object.fromEntries(
       visibleFields.map((field) => [
         field.name,
-        formValues[field.name] ?? "",
+        formValues[field.name] ?? field.defaultValue ?? "",
       ])
     );
 
@@ -329,7 +577,10 @@ function App() {
 
 
   function exportJSON() {
-    const schema = { fields };
+    const schema = {
+      title: formTitle,
+      fields,
+    };
 
     const json = JSON.stringify(schema, null, 2);
     const blob = new Blob([json], { type: "application/json" });
@@ -342,6 +593,7 @@ function App() {
 
     URL.revokeObjectURL(url);
   }
+
 
 
   function importJSON(e) {
@@ -359,6 +611,7 @@ function App() {
         if (
           !schema ||
           typeof schema !== "object" ||
+          Array.isArray(schema) ||
           !Array.isArray(schema.fields)
         ) {
           throw new Error("Invalid schema format.");
@@ -369,14 +622,69 @@ function App() {
           "Select", "Radio Group", "Checkbox", "Date",
         ];
 
-        const validFields = schema.fields.every(
-          (field) =>
-            field &&
-            typeof field.id === "string" &&
-            typeof field.name === "string" &&
-            typeof field.label === "string" &&
-            validTypes.includes(field.type)
-        );
+        const stringProperties = [
+          "id", "name", "label", "placeholder",
+          "defaultValue", "helpText", "pattern", "errorMessage",
+        ];
+
+        const numericProperties = [
+          "minLength", "maxLength", "minValue", "maxValue",
+        ];
+
+        const validFields = schema.fields.every((field) => {
+          if (
+            !field ||
+            typeof field !== "object" ||
+            Array.isArray(field) ||
+            !validTypes.includes(field.type)
+          ) {
+            return false;
+          }
+
+          if (
+            !stringProperties.every(
+              (key) => typeof field[key] === "string"
+            )
+          ) {
+            return false;
+          }
+
+          if (typeof field.required !== "boolean") {
+            return false;
+          }
+
+          if (
+            !numericProperties.every(
+              (key) =>
+                field[key] === "" ||
+                (typeof field[key] === "number" &&
+                  Number.isFinite(field[key]))
+            )
+          ) {
+            return false;
+          }
+
+          if (
+            !Array.isArray(field.options) ||
+            !field.options.every((option) => typeof option === "string")
+          ) {
+            return false;
+          }
+
+          if (
+            !Array.isArray(field.conditions) ||
+            !field.conditions.every(
+              (condition) =>
+                condition &&
+                typeof condition === "object" &&
+                !Array.isArray(condition)
+            )
+          ) {
+            return false;
+          }
+
+          return true;
+        });
 
         if (!validFields) {
           throw new Error("Schema contains invalid fields.");
@@ -395,6 +703,7 @@ function App() {
     reader.readAsText(file);
     e.target.value = "";
   }
+
 
 
   function handleDrop(targetFieldId) {
@@ -431,69 +740,173 @@ function App() {
   return (
     <Routes>
       <Route path="/" element={
-
-
-
         <div className="min-h-screen bg-slate-100 text-slate-900">
-          <header className="flex items-center justify-between border-b bg-white px-6 py-4">
-            <h1 className="text-xl lg:text-2xl font-bold text-indigo-600">FormCraft</h1>
+       
+          <header className="border-b bg-white px-4 py-4 sm:px-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h1 className="text-xl font-bold text-indigo-600 lg:text-2xl">
+                FormCraft
+              </h1>
 
-            <input
-              value={formTitle}
-              onChange={(e) => setFormTitle(e.target.value)}
-              className="mt-2 rounded-lg border p-2"
-              placeholder="Enter form title"
-            />
+              <input
+                value={formTitle}
+                onChange={(e) => setFormTitle(e.target.value)}
+                className="w-40 rounded-lg border p-2 sm:w-56"
+                placeholder="Enter form title"
+              />
 
-
-            <div className="flex gap-3">
+              {/* Mobile Menu Icon */}
               <button
-                onClick={handleSaveForm}
-                disabled={isSaving}
-                className="rounded-lg bg-green-600 px-3 py-2 text-white"
+                type="button"
+                onClick={() => setIsMenuOpen((prev) => !prev)}
+                className="rounded-lg border p-2 text-xl md:hidden"
+                aria-label="Toggle menu"
+                aria-expanded={isMenuOpen}
               >
-                {isSaving ? "Saving..." : "Save Form"}
+                {isMenuOpen ? "✕" : "☰"}
               </button>
 
+              {/* Desktop Buttons */}
+              <div className="hidden items-center gap-3 md:flex">
+                <button
+                  onClick={handleSaveForm}
+                  disabled={isSaving}
+                  className="rounded-lg bg-green-600 px-3 py-2 text-white"
+                >
+                  {isSaving ? "Saving..." : "Save Form"}
+                </button>
 
-              <button
-                onClick={() => {
-                  setIsPreview((current) => !current);
-                  setSubmittedData(null);
-                }}
-                className="rounded-lg border px-2 py-1 lg:px-4 lg:py-2 text-[12px] lg:text-[16px] "
-              >
-                {isPreview ? "Back to Builder" : "Preview"}
 
-              </button>
-              <button
-                onClick={exportJSON}
-                className="rounded-lg bg-indigo-600 px-2 py-1 lg:px-4 lg:py-2 text-white text-[12px] lg:text-[16px]"
-              >
-                Export JSON
-              </button>
+                <button
+                  onClick={() => {
+                    handlePublishForm();
+                    setIsMenuOpen(false);
+                  }}
+                  disabled={!formId || isPublishing || formStatus === "published"}
+                  className=" rounded-lg bg-blue-600 px-2 py-2 text-white disabled:opacity-50"
+                >
+                  {isPublishing
+                    ? "Publishing..."
+                    : formStatus === "published"
+                      ? "Published"
+                      : "Publish"}
+                </button>
 
-              <label className="cursor-pointer rounded-lg border px-2 py-1 lg:px-4 lg:py-2 text-[12px] lg:text-[16px]">
-                Import JSON
-                <input
-                  type="file"
-                  accept=".json,application/json"
-                  onChange={importJSON}
-                  className="hidden"
-                />
-              </label>
+
+                <button
+                  onClick={handleNewForm}
+                  className="rounded-lg bg-slate-200 px-4 py-2 text-slate-800"
+                >
+                  + New Form
+                </button>
+
+                <button
+                  onClick={() => {
+                    setIsPreview((current) => !current);
+                    setSubmittedData(null);
+                  }}
+                  className="rounded-lg border px-4 py-2"
+                >
+                  {isPreview ? "Back to Builder" : "Preview"}
+                </button>
+
+                <button
+                  onClick={exportJSON}
+                  className="rounded-lg bg-indigo-600 px-4 py-2 text-white"
+                >
+                  Export JSON
+                </button>
+
+                <label className="cursor-pointer rounded-lg border px-4 py-2">
+                  Import JSON
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={importJSON}
+                    className="hidden"
+                  />
+                </label>
+              </div>
             </div>
 
+            {/* Mobile Dropdown Menu */}
+            {isMenuOpen && (
+              <div className="mt-4 flex flex-col gap-2 md:hidden">
+                <button
+                  onClick={() => {
+                    handleSaveForm();
+                    setIsMenuOpen(false);
+                  }}
+                  disabled={isSaving}
+                  className="rounded-lg bg-green-600 px-3 py-2 text-white"
+                >
+                  {isSaving ? "Saving..." : "Save Form"}
+                </button>
+
+                <button
+                  onClick={() => {
+                    handleNewForm();
+                    setIsMenuOpen(false);
+                  }}
+                  className="rounded-lg bg-slate-200 px-4 py-2"
+                >
+                  + New Form
+                </button>
+
+                <button
+                  onClick={() => {
+                    setIsPreview((current) => !current);
+                    setSubmittedData(null);
+                    setIsMenuOpen(false);
+                  }}
+                  className="rounded-lg border px-4 py-2"
+                >
+                  {isPreview ? "Back to Builder" : "Preview"}
+                </button>
+
+                <button
+                  onClick={() => {
+                    exportJSON();
+                    setIsMenuOpen(false);
+                  }}
+                  className="rounded-lg bg-indigo-600 px-4 py-2 text-white"
+                >
+                  Export JSON
+                </button>
+
+                <label className="cursor-pointer rounded-lg border px-4 py-2 text-center">
+                  Import JSON
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={(e) => {
+                      importJSON(e);
+                      setIsMenuOpen(false);
+                    }}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            )}
+
             {saveMessage && (
-              <p className="text-sm text-green-600">{saveMessage}</p>
+              <p
+                className={`mt-2 text-sm ${saveMessageType === "error"
+                  ? "text-red-500"
+                  : "text-green-600"
+                  }`}
+              >
+                {saveMessage}
+              </p>
             )}
 
             {importError && (
-              <p role="alert" className="text-sm text-red-600">
+              <p role="alert" className="mt-2 text-sm text-red-600">
                 {importError}
               </p>
             )}
           </header>
+
 
           <main className="grid min-h-[calc(100vh-73px)] grid-cols-1 sm:p-4 lg:grid-cols-12 gap-4 p-4">
             <aside className="rounded-xl border bg-white p-3 sm:p-4 lg:col-span-3">
@@ -503,7 +916,10 @@ function App() {
                 {fieldTypes.map((type) => (
                   <button
                     key={type}
+                    draggable
                     onClick={() => addField(type)}
+                    onDragStart={() => setDraggedFieldType(type)}
+                    onDragEnd={() => setDraggedFieldType(null)}
                     className="w-full rounded-lg border p-3 text-left hover:border-indigo-500 hover:bg-indigo-50"
                   >
                     + {type}
@@ -518,7 +934,7 @@ function App() {
               </h2>
 
               {isPreview ? (
-                <form onSubmit={handleSubmit} className="space-y-4">
+                <form onSubmit={handleSubmit} noValidate className="space-y-4">
                   {fields.filter((field) => isFieldVisible(field, fields, formValues))
                     .map((field) => (
                       <div key={field.id}>
@@ -530,13 +946,19 @@ function App() {
                         </label>
 
                         {renderField(field)}
+                        {field.helpText && (
+                          <p id={`${field.id}-help`} className="mt-1 text-sm text-slate-500">
+                            {field.helpText}
+                          </p>
+                        )}
                         {errors[field.name]?.map((error, index) => (
                           <p
+                            id={`${field.id}-error`}
                             key={index}
                             className="mt-1 text-sm text-red-600"
                             role="alert"
                           >
-                            {error}
+                            {errors[field.name]?.join(", ")}
                           </p>
                         ))}
                       </div>
@@ -556,7 +978,15 @@ function App() {
                   )}
                 </form>
               ) : (
-                <div className="min-h-[500px] space-y-4 rounded-lg border-2 border-dashed border-slate-300 p-4">
+                <div onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+
+                    if (draggedFieldType) {
+                      addField(draggedFieldType);
+                      setDraggedFieldType(null);
+                    }
+                  }} className="min-h-[500px] space-y-4 rounded-lg border-2 border-dashed border-slate-300 p-4">
                   {fields.length === 0 ? (
                     <p className="py-20 text-center text-slate-500">
                       Add fields here to build your form.
@@ -578,7 +1008,14 @@ function App() {
                           }`}
                       >
                         <p className="font-medium">{field.label}</p>
+
                         {renderField(field)}
+                        {field.helpText && (
+                          <p className="mt-1 text-sm text-slate-500">
+                            {field.helpText}
+                          </p>
+                        )}
+
                         <p className="mt-1 text-sm text-slate-500">
                           Type: {field.type} · Name: {field.name}
                         </p>
@@ -607,16 +1044,46 @@ function App() {
                   {savedForms.map((form) => (
                     <div
                       key={form._id}
-                      className="flex items-center justify-between gap-2 rounded-lg border p-2"
+                      className="flex flex-col items-center justify-between gap-2 rounded-lg border p-2"
                     >
-                      <span className="text-sm">{form.title}</span>
-
-                      <button
-                        onClick={() => handleLoadForm(form._id)}
-                        className="rounded bg-slate-100 px-3 py-1 text-sm"
+                      <span className="text-sm font-bold">{form.title}</span>
+                      <span
+                        className={`text-xs font-medium ${form.status === "published"
+                          ? "text-green-600"
+                          : "text-amber-600"
+                          }`}
                       >
-                        Load
-                      </button>
+                        {form.status || "draft"}
+                      </span>
+                      <div className="flex  gap-2">
+                        <button
+                          onClick={() => handleLoadForm(form._id)}
+                          className="rounded bg-slate-100 px-1 py-1 border text-[12px]"
+                        >
+                          Load
+                        </button>
+
+                        <button
+                          onClick={() => window.open(`/forms/${form._id}`, "_blank")}
+                          className="rounded bg-slate-100 px-1 py-1 border text-[12px]"
+                        >
+                          Open Form
+                        </button>
+
+                        <button
+                          onClick={() => handleCopyLink(form._id)}
+                          className="rounded bg-slate-100 px-1 py-1 border text-[12px]"
+                        >
+                          Copy Link
+                        </button>
+
+                        <button
+                          onClick={() => handleDeleteForm(form._id)}
+                          className="rounded bg-slate-100 px-1 py-1 border text-[12px]"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -670,6 +1137,32 @@ function App() {
                     />
                   </div>
 
+                  <div>
+                    <label className="mb-1 block text-sm font-medium">
+                      Default Value
+                    </label>
+                    <input
+                      value={selectedField.defaultValue ?? ""}
+                      onChange={(e) =>
+                        updateSelectedField("defaultValue", e.target.value)
+                      }
+                      className="w-full rounded-lg border p-2"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium">
+                      Help Text
+                    </label>
+                    <input
+                      value={selectedField.helpText ?? ""}
+                      onChange={(e) =>
+                        updateSelectedField("helpText", e.target.value)
+                      }
+                      className="w-full rounded-lg border p-2"
+                    />
+                  </div>
+
                   <label className="flex items-center gap-2">
                     <input
                       type="checkbox"
@@ -714,39 +1207,142 @@ function App() {
                         ))}
                     </select>
 
+                 
                     {selectedField.conditions?.length > 0 && (
-                      <>
+                      <div className="space-y-3">
+                        <label className="font-medium">
+                          Match Conditions
+                        </label>
+
+                        {/* AND / OR selection */}
                         <select
                           className="w-full rounded-lg border p-2"
-                          value={selectedField.conditions[0].operator}
+                          value={selectedField.conditionLogic || "AND"}
                           onChange={(e) =>
-                            updateSelectedField("conditions", [{
-                              ...selectedField.conditions[0],
-                              operator: e.target.value,
-                            }])
+                            updateSelectedField("conditionLogic", e.target.value)
                           }
                         >
-                          <option value="equals">Equals</option>
-                          <option value="notEquals">Does not equal</option>
-                          <option value="contains">Contains</option>
-                          <option value="greaterThan">Greater than</option>
-                          <option value="lessThan">Less than</option>
-                          <option value="isEmpty">Is empty</option>
+                          <option value="AND">Match ALL conditions (AND)</option>
+                          <option value="OR">Match ANY condition (OR)</option>
                         </select>
 
-                        <input
-                          className="w-full rounded-lg border p-2"
-                          placeholder="Comparison value"
-                          value={selectedField.conditions[0].value}
-                          onChange={(e) =>
-                            updateSelectedField("conditions", [{
-                              ...selectedField.conditions[0],
-                              value: e.target.value,
-                            }])
+                        {/* Multiple conditions */}
+                        {selectedField.conditions.map((condition, index) => (
+                          <div
+                            key={index}
+                            className="space-y-2 rounded-lg border p-3"
+                          >
+                            <label className="text-sm font-medium">
+                              Condition {index + 1}
+                            </label>
+
+                            {/* Source field */}
+                            <select
+                              className="w-full rounded-lg border p-2"
+                              value={condition.fieldId}
+                              onChange={(e) => {
+                                const updated = [...selectedField.conditions];
+
+                                updated[index] = {
+                                  ...condition,
+                                  fieldId: e.target.value,
+                                };
+
+                                updateSelectedField("conditions", updated);
+                              }}
+                            >
+                              <option value="">Select field</option>
+
+                              {fields
+                                .filter((field) => field.id !== selectedField.id)
+                                .map((field) => (
+                                  <option key={field.id} value={field.id}>
+                                    {field.label}
+                                  </option>
+                                ))}
+                            </select>
+
+                            {/* Operator */}
+                            <select
+                              className="w-full rounded-lg border p-2"
+                              value={condition.operator}
+                              onChange={(e) => {
+                                const updated = [...selectedField.conditions];
+
+                                updated[index] = {
+                                  ...condition,
+                                  operator: e.target.value,
+                                };
+
+                                updateSelectedField("conditions", updated);
+                              }}
+                            >
+                              <option value="equals">Equals</option>
+                              <option value="notEquals">Does not equal</option>
+                              <option value="contains">Contains</option>
+                              <option value="greaterThan">Greater than</option>
+                              <option value="lessThan">Less than</option>
+                              <option value="isEmpty">Is empty</option>
+                            </select>
+
+                            {/* Comparison value */}
+                            {condition.operator !== "isEmpty" && (
+                              <input
+                                className="w-full rounded-lg border p-2"
+                                placeholder="Comparison value"
+                                value={condition.value ?? ""}
+                                onChange={(e) => {
+                                  const updated = [...selectedField.conditions];
+
+                                  updated[index] = {
+                                    ...condition,
+                                    value: e.target.value,
+                                  };
+
+                                  updateSelectedField("conditions", updated);
+                                }}
+                              />
+                            )}
+
+                            {/* Remove condition */}
+                            <button
+                              type="button"
+                              className="text-sm text-red-600"
+                              onClick={() =>
+                                updateSelectedField(
+                                  "conditions",
+                                  selectedField.conditions.filter(
+                                    (_, i) => i !== index
+                                  )
+                                )
+                              }
+                            >
+                              Remove Condition
+                            </button>
+                          </div>
+                        ))}
+
+                        {/* Add condition */}
+                        <button
+                          type="button"
+                          className="w-full rounded-lg border p-2 text-sm"
+                          onClick={() =>
+                            updateSelectedField("conditions", [
+                              ...selectedField.conditions,
+                              {
+                                fieldId: "",
+                                operator: "equals",
+                                value: "",
+                              },
+                            ])
                           }
-                        />
-                      </>
+                        >
+                          + Add Condition
+                        </button>
+                      </div>
                     )}
+
+
                   </div>
 
                   {["Text", "Textarea", "Email"].includes(selectedField.type) && (
@@ -777,6 +1373,19 @@ function App() {
                           onChange={(e) =>
                             updateSelectedField("maxLength", e.target.value)
                           }
+                          className="w-full rounded-lg border p-2"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-sm font-medium">
+                          Regex Pattern
+                        </label>
+                        <input
+                          value={selectedField.pattern ?? ""}
+                          onChange={(e) =>
+                            updateSelectedField("pattern", e.target.value)
+                          }
+                          placeholder="Example: ^[A-Za-z]+$"
                           className="w-full rounded-lg border p-2"
                         />
                       </div>

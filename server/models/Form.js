@@ -1,4 +1,3 @@
-
 import mongoose from "mongoose";
 
 const conditionSchema = new mongoose.Schema(
@@ -110,7 +109,7 @@ const formSchema = new mongoose.Schema(
       type: [fieldSchema],
       default: [],
     },
-    status: {
+     status: {
       type: String,
       enum: ["draft", "published"],
       default: "draft",
@@ -123,84 +122,3 @@ const Form = mongoose.model("Form", formSchema);
 
 export default Form;
 
-
-
-
-
-// import mongoose from "mongoose";
-
-// const fieldSchema = new mongoose.Schema(
-//   {
-//     name: {
-//       type: String,
-//       required: true,
-//     },
-//     type: {
-//       type: String,
-//       required: true,
-//       enum: [
-//         "text",
-//         "textarea",
-//         "number",
-//         "email",
-//         "select",
-//         "radio",
-//         "checkbox",
-//         "date",
-//       ],
-//     },
-//     label: {
-//       type: String,
-//       required: true,
-//     },
-//     placeholder: {
-//       type: String,
-//       default: "",
-//     },
-//     required: {
-//       type: Boolean,
-//       default: false,
-//     },
-//     options: {
-//       type: [String],
-//       default: [],
-//     },
-//     defaultValue: {
-//       type: mongoose.Schema.Types.Mixed,
-//       default: "",
-//     },
-//     validation: {
-//       type: mongoose.Schema.Types.Mixed,
-//       default: {},
-//     },
-//     conditions: {
-//       type: [mongoose.Schema.Types.Mixed],
-//       default: [],
-//     },
-//   },
-//   { _id: true }
-// );
-
-// const formSchema = new mongoose.Schema(
-//   {
-//     title: {
-//       type: String,
-//       required: true,
-//       trim: true,
-//     }, 
-//     fields: {
-//       type: [fieldSchema],
-//       default: [],
-//     },
-//     status: {
-//       type: String,
-//       enum: ["draft", "published"],
-//       default: "draft",
-//     },
-//   },
-//   { timestamps: true }
-// );
-
-// const Form = mongoose.model("Form", formSchema);
-
-// export default Form;

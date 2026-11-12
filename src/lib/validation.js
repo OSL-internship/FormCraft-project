@@ -5,7 +5,7 @@ export function validateField(field, value) {
     value === null ||
     String(value).trim() === "";
 
-  if (field.required && empty) {
+  if (field.required && (empty || (field.type === "Checkbox" && value !== true))) {
     errors.push(field.errorMessage || "This field is required.");
     return errors;
   }
@@ -21,8 +21,7 @@ export function validateField(field, value) {
     text.length < Number(field.minLength)
   ) {
     errors.push(
-      field.errorMessage ||
-        `Minimum length is ${field.minLength}.`
+      `Minimum length is ${field.minLength}.`
     );
   }
 
@@ -32,8 +31,7 @@ export function validateField(field, value) {
     text.length > Number(field.maxLength)
   ) {
     errors.push(
-      field.errorMessage ||
-        `Maximum length is ${field.maxLength}.`
+      `Maximum length is ${field.maxLength}.`
     );
   }
 
@@ -46,8 +44,7 @@ export function validateField(field, value) {
       number < Number(field.minValue)
     ) {
       errors.push(
-        field.errorMessage ||
-          `Minimum value is ${field.minValue}.`
+        `Minimum value is ${field.minValue}.`
       );
     }
 
@@ -57,8 +54,7 @@ export function validateField(field, value) {
       number > Number(field.maxValue)
     ) {
       errors.push(
-        field.errorMessage ||
-          `Maximum value is ${field.maxValue}.`
+        `Maximum value is ${field.maxValue}.`
       );
     }
   }
@@ -67,7 +63,7 @@ export function validateField(field, value) {
     const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
     if (!emailPattern.test(text)) {
-      errors.push(field.errorMessage || "Enter a valid email.");
+      errors.push("Enter a valid email.");
     }
   }
 
@@ -75,7 +71,7 @@ export function validateField(field, value) {
     try {
       if (!new RegExp(field.pattern).test(text)) {
         errors.push(
-          field.errorMessage || "Value format is invalid."
+         "Value format is invalid."
         );
       }
     } catch {
